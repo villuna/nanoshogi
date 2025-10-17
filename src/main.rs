@@ -1,3 +1,6 @@
+use std::io;
+mod commands;
+
 fn main() {
-    println!("Hello, world!");
+    let stdin = io::stdin().lines();
 }
