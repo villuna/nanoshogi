@@ -2,8 +2,8 @@ use nom::{
     Finish, IResult, Parser,
     branch::alt,
     bytes::complete::tag,
-    character::complete::{digit1, one_of, space1},
-    combinator::opt,
+    character::complete::{char, digit1, one_of, space1},
+    combinator::{opt, recognize},
     multi::{many_m_n, separated_list1},
     sequence::preceded,
 };
@@ -13,8 +13,46 @@ pub const SFEN_STARTPOS: &'static str =
 
 use crate::model::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
 
+fn hand_piece(piece_char: char) -> impl Fn(&str) -> IResult<&str, u8> {
+    move |input| {
+        opt(
+            (opt(recognize(digit1)), char(piece_char)).map_res(|(num, _): (Option<&str>, _)| {
+                if let Some(n) = num {
+                    n.parse::<u8>()
+                } else {
+                    Ok(1)
+                }
+            }),
+        )
+        // If nothing was parsed that means zero of that piece
+        .map(|n| n.unwrap_or_default())
+        .parse(input)
+    }
+}
+
+fn nonempty_hands(mut input: &str) -> IResult<&str, Hands> {
+    let black = "RBGSNLP";
+    let white = "rbgsnlp";
+    let mut black_hand = [0; 7];
+    let mut white_hand = [0; 7];
+
+    for (idx, c) in black.chars().enumerate() {
+        let (i, n) = hand_piece(c)(input)?;
+        input = i;
+        black_hand[idx] = n;
+    }
+
+    for (idx, c) in white.chars().enumerate() {
+        let (i, n) = hand_piece(c)(input)?;
+        input = i;
+        white_hand[idx] = n;
+    }
+
+    Ok((input, Hands::new(black_hand, white_hand)))
+}
+
 fn hands(input: &str) -> IResult<&str, Hands> {
-    alt((tag("-").map(|_| Hands::new([0; 7], [0; 7])),)).parse(input)
+    alt((tag("-").map(|_| Hands::new([0; 7], [0; 7])), nonempty_hands)).parse(input)
 }
 
 fn player(input: &str) -> IResult<&str, Player> {
@@ -190,8 +228,18 @@ mod test {
         let startpos = parse_sfen(SFEN_STARTPOS);
         assert!(startpos.is_ok());
 
-        let board =
-            parse_sfen("8l/1l+R2P3/p2pBG1pp/kps1p4/Nn1P2G2/P1P1P2PP/1PS6/1KSG3+r1/LN2+p3L - 124");
+        let board = parse_sfen(
+            "8l/1l+R2P3/p2pBG1pp/kps1p4/Nn1P2G2/P1P1P2PP/1PS6/1KSG3+r1/LN2+p3L w Sbgn3p 124",
+        );
         assert!(board.is_ok());
+    }
+
+    #[test]
+    fn test_hands() {
+        assert_eq!(hands("-"), Ok(("", Hands::new([0; 7], [0; 7]))));
+        assert_eq!(
+            hands("Sbgn3p"),
+            Ok(("", Hands::new([0, 0, 0, 1, 0, 0, 0], [0, 1, 1, 0, 1, 0, 3])))
+        );
     }
 }
