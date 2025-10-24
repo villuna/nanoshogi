@@ -1,21 +1,24 @@
-use haitaka_usi::GuiMessage;
-
-use crate::engine::Engine;
+use crate::{engine::Engine, usi::GuiMessage};
 
 mod engine;
 mod sfen;
 mod types;
+mod usi;
 
 fn main() {
     eprintln!("Welcome to nanoshogi - the exceedingly okay shogi bot");
     let mut engine = Engine::new();
 
     for line in std::io::stdin().lines() {
-        let msg = GuiMessage::parse_no_nl(&line.unwrap()).unwrap();
-        let should_shutdown = engine.handle_message(msg);
+        match GuiMessage::parse(line.unwrap()) {
+            Ok(msg) => {
+                let should_shutdown = engine.handle_message(msg);
 
-        if should_shutdown {
-            break;
-        }
+                if should_shutdown {
+                    break;
+                }
+            }
+            Err(e) => eprintln!("Error: {e:?}"),
+        };
     }
 }

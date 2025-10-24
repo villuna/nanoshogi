@@ -4,14 +4,17 @@ use nom::{
     bytes::complete::tag,
     character::complete::{digit1, one_of, space1},
     combinator::opt,
-    multi::{many_m_n, separated_list1},
+    multi::{many_m_n, many1, separated_list1},
     sequence::preceded,
 };
 
-use crate::types::{Board, Hand, Piece, PieceType, Player, Position};
+pub const SFEN_STARTPOS: &'static str =
+    "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
-fn hands(input: &str) -> IResult<&str, [Hand; 2]> {
-    alt((tag("-").map(|_| [Hand::default(), Hand::default()]),)).parse(input)
+use crate::types::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
+
+fn hands(input: &str) -> IResult<&str, Hands> {
+    alt((tag("-").map(|_| Hands::new([0; 7], [0; 7])),)).parse(input)
 }
 
 fn player(input: &str) -> IResult<&str, Player> {
@@ -27,6 +30,52 @@ enum RowEntry {
     Empty(u8),
 }
 
+fn square(input: &str) -> IResult<&str, Square> {
+    (
+        one_of("123456789").map(|c| c as u8 - b'1'),
+        one_of("abcdefghi").map(|c| c as u8 - b'a'),
+    )
+        .map(|(y, x)| Square::new(x, y).unwrap())
+        .parse(input)
+}
+
+fn normal_move(input: &str) -> IResult<&str, Move> {
+    (square, square, opt(tag("+")))
+        .map(|(from, to, promote)| Move::Move {
+            from,
+            to,
+            promote: promote.is_some(),
+        })
+        .parse(input)
+}
+
+fn drop_move(input: &str) -> IResult<&str, Move> {
+    (one_of("PLNSGBRK"), tag("*"), square)
+        .map(|(piece, _, to)| Move::Drop {
+            ty: piece_char_to_type(piece).unwrap(),
+            to,
+        })
+        .parse(input)
+}
+
+fn r#move(input: &str) -> IResult<&str, Move> {
+    alt((normal_move, drop_move)).parse(input)
+}
+
+fn piece_char_to_type(c: char) -> Option<PieceType> {
+    match c.to_ascii_lowercase() {
+        'p' => Some(PieceType::Pawn),
+        'l' => Some(PieceType::Lance),
+        'n' => Some(PieceType::Knight),
+        's' => Some(PieceType::Silver),
+        'g' => Some(PieceType::Gold),
+        'b' => Some(PieceType::Bishop),
+        'r' => Some(PieceType::Rook),
+        'k' => Some(PieceType::King),
+        _ => None,
+    }
+}
+
 fn piece(input: &str) -> IResult<&str, Piece> {
     (
         opt(tag("+")).map(|p| p.is_some()),
@@ -39,17 +88,7 @@ fn piece(input: &str) -> IResult<&str, Piece> {
                 Player::White
             };
 
-            let mut ty = match piece.to_ascii_lowercase() {
-                'p' => PieceType::Pawn,
-                'l' => PieceType::Lance,
-                'n' => PieceType::Knight,
-                's' => PieceType::Silver,
-                'g' => PieceType::Gold,
-                'b' => PieceType::Bishop,
-                'r' => PieceType::Rook,
-                'k' => PieceType::King,
-                _ => unreachable!(),
-            };
+            let mut ty = piece_char_to_type(piece).unwrap();
 
             if promoted {
                 ty = ty.promoted().unwrap();
@@ -106,7 +145,7 @@ fn board(input: &str) -> IResult<&str, Board> {
                     board[i * 9 + j] = *piece;
                 }
             }
-            board
+            Board::new(board)
         })
         .parse(input)
 }
@@ -131,16 +170,17 @@ pub fn parse_sfen(input: &str) -> Result<Position, nom::error::Error<&str>> {
     Ok(sfen(input).finish()?.1)
 }
 
+pub fn parse_moves(input: &str) -> Result<Vec<Move>, nom::error::Error<&str>> {
+    Ok(many1(r#move).parse(input).finish()?.1)
+}
+
 #[cfg(test)]
 mod test {
-    use haitaka_usi::SFEN_STARTPOS;
-
     use super::*;
 
     #[test]
     fn test_sfen() {
         let startpos = parse_sfen(SFEN_STARTPOS);
-        println!("{startpos:?}");
-        assert!(false);
+        assert!(startpos.is_ok());
     }
 }
