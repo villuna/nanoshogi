@@ -52,6 +52,14 @@ impl Square {
     pub fn index(&self) -> usize {
         self.y as usize * 9 + self.x as usize
     }
+
+    /// Attempts to add an offset to this square's coordinates. Returns None if the result would be
+    /// off the board.
+    pub fn add(&self, offset: (i8, i8)) -> Option<Self> {
+        let x = self.x.checked_add_signed(offset.0)?;
+        let y = self.y.checked_add_signed(offset.1)?;
+        Square::new(x, y)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
@@ -71,6 +79,16 @@ pub enum Move {
 pub enum Player {
     Black,
     White,
+}
+
+impl Player {
+    /// Returns the opposing player.
+    pub fn opposite(&self) -> Player {
+        match self {
+            Player::Black => Player::White,
+            Player::White => Player::Black,
+        }
+    }
 }
 
 #[derive(Default, Copy, Clone, Debug, Hash, Eq, PartialEq)]
@@ -192,6 +210,20 @@ impl PieceType {
         }
     }
 
+    /// Returns whether a piece of this type can promote. Pieces that are already promoted cannot
+    /// promote.
+    pub fn can_promote(&self) -> bool {
+        match self {
+            PieceType::Pawn
+            | PieceType::Lance
+            | PieceType::Knight
+            | PieceType::Silver
+            | PieceType::Bishop
+            | PieceType::Rook => true,
+            _ => false,
+        }
+    }
+
     /// Returns the number of points of material this piece represents
     /// Based off of Kohji Tanigawa's 2006 scheme
     /// (https://en.wikipedia.org/wiki/Shogi_strategy#Relative_piece_value)
@@ -289,8 +321,226 @@ impl Position {
         parse_sfen(input).unwrap()
     }
 
+    /// Returns a vector containing all the possible moves that can be made in this position.
     pub fn possible_moves(&self) -> Vec<Move> {
-        todo!()
+        let mut res = vec![];
+        for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                if let Some(piece) = self.board.0[square.index()]
+                    && piece.player == self.player_to_move
+                {
+                    res.append(&mut self.moves_for_piece(square));
+                }
+            }
+        }
+
+        // TODO drops
+
+        // TODO check for check
+
+        res
+    }
+
+    /// Returns all the possible moves the given piece can make.
+    fn moves_for_piece(&self, from: Square) -> Vec<Move> {
+        let piece = self.board.0[from.index()].as_ref().unwrap();
+        let squares = self.movable_squares(from, false);
+        let mut moves = vec![];
+
+        for square in squares {
+            let is_promote_square = if piece.player == Player::Black {
+                square.y <= 2
+            } else {
+                square.y >= 6
+            };
+
+            if is_promote_square && piece.ty.can_promote() {
+                moves.push(Move::Move {
+                    from,
+                    to: square,
+                    promote: true,
+                });
+            }
+
+            // TODO test if a piece is physically able to keep going without promoting - if not,
+            // it *has* to promote.
+
+            moves.push(Move::Move {
+                from,
+                to: square,
+                promote: false,
+            });
+        }
+
+        moves
+    }
+
+    // helper function for [Position::movable_squares]. Given a list of squares (positions relative
+    // to the current square), returns all the squares that a piece can move to. Used for pieces
+    // that just have a set of squares they can move to.
+    //
+    // Note that the offsets will also be from the perspective of the moving player - so, the y
+    // axis will be flipped if the moving player is black.
+    fn movable_squares_offsets(
+        &self,
+        from: Square,
+        offsets: &[(i8, i8)],
+        moving_player: Player,
+    ) -> Vec<Square> {
+        let mut res = vec![];
+
+        for &(mut offset) in offsets {
+            if moving_player == Player::Black {
+                offset.1 *= -1;
+            };
+            let Some(square) = from.add(offset) else {
+                continue;
+            };
+
+            if self.square_is_available(square, moving_player) {
+                res.push(square);
+            }
+        }
+
+        res
+    }
+
+    // Helper function for [Position::movable_squares]. Given a list of offsets (or directions) from
+    // the current square, attempts to move as far as possible in those directions until stopping.
+    // Used for pieces that move any number of squares in a certain set of directions.
+    //
+    // Similarly to [Position::movable_squares_offsets], the y values of the offsets are
+    // flipped for Black.
+    fn movable_squares_march(
+        &self,
+        from: Square,
+        offsets: &[(i8, i8)],
+        moving_player: Player,
+    ) -> Vec<Square> {
+        let mut res = vec![];
+
+        for &(mut offset) in offsets {
+            if moving_player == Player::Black {
+                offset.1 *= -1;
+            };
+
+            let mut square = from;
+
+            loop {
+                let Some(sq) = square.add(offset) else {
+                    break;
+                };
+                square = sq;
+                if !self.square_is_available(square, moving_player) {
+                    break;
+                }
+
+                res.push(square);
+                if self.board.0[square.index()].is_some() {
+                    // There is an enemy piece here so we can't go any further
+                    break;
+                }
+            }
+        }
+
+        res
+    }
+
+    /// Given the coordinate of a piece on the board, returns all the squares that piece can move
+    /// to. If `disallow_check` is true, filters out all the moves that would leave the king in
+    /// check.
+    fn movable_squares(&self, from: Square, disallow_check: bool) -> Vec<Square> {
+        let piece = self.board.0[from.index()].as_ref().unwrap();
+
+        match piece.ty {
+            PieceType::Pawn => {
+                // The pawn can only move one square forward (and, mercifully, captures forward
+                // as well).
+                self.movable_squares_offsets(from, &[(0, 1)], piece.player)
+            }
+            PieceType::Lance => {
+                // The lance is like a rook that can only move forward.
+                self.movable_squares_march(from, &[(0, 1)], piece.player)
+            }
+            PieceType::Knight => {
+                // The knight moves two squares forward and one square either left or right.
+                // Just like chess, it can jump over pieces.
+                self.movable_squares_offsets(from, &[(-1, 2), (1, 2)], piece.player)
+            }
+            PieceType::Silver => self.movable_squares_offsets(
+                from,
+                &[(-1, 1), (0, 1), (1, 1), (-1, -1), (1, -1)],
+                piece.player,
+            ),
+            PieceType::Gold
+            | PieceType::ProPawn
+            | PieceType::ProLance
+            | PieceType::ProKnight
+            | PieceType::ProSilver => self.movable_squares_offsets(
+                from,
+                &[(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (0, -1)],
+                piece.player,
+            ),
+            PieceType::Bishop => self.movable_squares_march(
+                from,
+                &[(-1, -1), (-1, 1), (1, -1), (1, 1)],
+                piece.player,
+            ),
+            PieceType::Rook => {
+                self.movable_squares_march(from, &[(-1, 0), (1, 0), (0, -1), (0, 1)], piece.player)
+            }
+            PieceType::ProBishop => {
+                // Like a bishop...
+                let mut res = self.movable_squares_march(
+                    from,
+                    &[(-1, -1), (-1, 1), (1, -1), (1, 1)],
+                    piece.player,
+                );
+                // but can move one square in the directions a rook can
+                res.extend(self.movable_squares_offsets(
+                    from,
+                    &[(-1, 0), (1, 0), (0, -1), (0, 1)],
+                    piece.player,
+                ));
+                res
+            }
+            PieceType::ProRook => {
+                // Like a rook...
+                let mut res = self.movable_squares_march(
+                    from,
+                    &[(-1, 0), (1, 0), (0, -1), (0, 1)],
+                    piece.player,
+                );
+                // but can move one square in the directions a bishop can
+                res.extend(self.movable_squares_offsets(
+                    from,
+                    &[(-1, -1), (-1, 1), (1, -1), (1, 1)],
+                    piece.player,
+                ));
+                res
+            }
+            PieceType::King => self.movable_squares_offsets(
+                from,
+                &[
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                ],
+                piece.player,
+            ),
+        }
+    }
+
+    /// Returns whether a player could theoretically move a piece to that square (i.e., the square
+    /// is empty or contains an enemy piece)
+    fn square_is_available(&self, target: Square, moving_player: Player) -> bool {
+        self.board.0[target.index()].is_none_or(|piece| piece.player == moving_player.opposite())
     }
 
     /// Attempts to make a move on the board without checking whether that move can be made.
@@ -303,6 +553,7 @@ impl Position {
                     self.hands.insert_piece(self.player_to_move, piece.ty);
                 }
                 self.board.0[to.index()] = self.board.0[from.index()];
+                self.board.0[from.index()] = None;
                 if promote {
                     self.board.0[to.index()].as_mut().unwrap().ty.promote();
                 }
@@ -338,7 +589,7 @@ impl Display for Position {
 
 #[cfg(test)]
 mod test {
-    use crate::model::Hands;
+    use super::*;
 
     #[test]
     fn test_eval_hand() {
