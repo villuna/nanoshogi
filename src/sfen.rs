@@ -11,7 +11,7 @@ use nom::{
 pub const SFEN_STARTPOS: &'static str =
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
-use crate::types::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
+use crate::model::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
 
 fn hands(input: &str) -> IResult<&str, Hands> {
     alt((tag("-").map(|_| Hands::new([0; 7], [0; 7])),)).parse(input)
@@ -35,10 +35,7 @@ fn square(input: &str) -> IResult<&str, Square> {
         one_of("123456789").map(|c| c as u8 - b'1'),
         one_of("abcdefghi").map(|c| c as u8 - b'a'),
     )
-        .map(|(y, x)| {
-            dbg!(x, y);
-            Square::new(x, y).unwrap()
-        })
+        .map(|(x, y)| Square::new(x, y).unwrap())
         .parse(input)
 }
 
@@ -192,5 +189,9 @@ mod test {
     fn test_sfen() {
         let startpos = parse_sfen(SFEN_STARTPOS);
         assert!(startpos.is_ok());
+
+        let board =
+            parse_sfen("8l/1l+R2P3/p2pBG1pp/kps1p4/Nn1P2G2/P1P1P2PP/1PS6/1KSG3+r1/LN2+p3L - 124");
+        assert!(board.is_ok());
     }
 }

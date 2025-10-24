@@ -2,8 +2,8 @@ use std::{iter::Peekable, str::SplitWhitespace};
 use thiserror::Error;
 
 use crate::{
+    model::{Move, Position},
     sfen::{SFEN_STARTPOS, parse_moves, parse_sfen},
-    types::{Move, Position},
 };
 
 /// A message passed from the GUI to the engine.
@@ -12,7 +12,8 @@ pub enum GuiMessage {
     Usi,
     /// Tells the engine to start thinking from the given position, optionally after a given set
     /// of moves.
-    Position(Position, Option<Vec<Move>>),
+    /// If no moves are given, the vector will be empty.
+    Position(Position, Vec<Move>),
     /// Tells the engine to stop as soon as possible.
     Quit,
 }
@@ -155,7 +156,10 @@ fn parse_position_command<'i>(
         }
     }
 
-    Ok(GuiMessage::Position(position.unwrap(), moves))
+    Ok(GuiMessage::Position(
+        position.unwrap(),
+        moves.unwrap_or_default(),
+    ))
 }
 
 // Checks if the command is empty (i.e. there are no more tokens in the stream), and if so returns

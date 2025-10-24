@@ -1,8 +1,8 @@
 use crate::{engine::Engine, usi::GuiMessage};
 
 mod engine;
+mod model;
 mod sfen;
-mod types;
 mod usi;
 
 fn main() {

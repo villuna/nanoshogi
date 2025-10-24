@@ -1,4 +1,4 @@
-use crate::types::Position;
+use crate::model::Position;
 use crate::usi::{EngineMessage, GuiMessage, IdParam};
 
 // Prints an engine message to stdout
@@ -21,8 +21,13 @@ impl Engine {
         match msg {
             GuiMessage::Usi => self.handle_usi(),
             GuiMessage::Position(position, moves) => {
-                dbg!(&position);
                 self.position = position;
+
+                for mve in moves {
+                    self.position.make_move_unchecked(mve);
+                }
+
+                println!("{}", self.position);
             }
             GuiMessage::Quit => return true,
         }
