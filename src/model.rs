@@ -129,9 +129,8 @@ impl Hands {
 
     /// Takes a piece from the given players hand. Panics if this is not possible.
     pub fn take_piece(&mut self, player: Player, piece: PieceType) {
-        self.get_hand_mut(player)[piece as usize]
-            .checked_sub(1)
-            .unwrap();
+        let count = &mut self.get_hand_mut(player)[piece as usize];
+        *count = count.checked_sub(1).unwrap();
     }
 
     fn get_hand_mut(&mut self, player: Player) -> &mut [u8; 7] {
@@ -170,19 +169,19 @@ impl Display for Hands {
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PieceType {
-    Pawn = 0,
-    Lance,
-    Knight,
-    Silver,
-    Gold,
+    Rook = 0,
     Bishop,
-    Rook,
-    ProPawn,
-    ProLance,
-    ProKnight,
-    ProSilver, // tony hawk's pro silver
-    ProBishop,
+    Gold,
+    Silver,
+    Knight,
+    Lance,
+    Pawn,
     ProRook,
+    ProBishop,
+    ProSilver, // tony hawk's pro silver
+    ProKnight,
+    ProLance,
+    ProPawn,
     King,
 }
 
@@ -202,10 +201,28 @@ impl PieceType {
         }
     }
 
+    pub fn unpromoted(&self) -> Option<Self> {
+        match self {
+            PieceType::ProPawn => Some(PieceType::Pawn),
+            PieceType::ProLance => Some(PieceType::Lance),
+            PieceType::ProKnight => Some(PieceType::Knight),
+            PieceType::ProSilver => Some(PieceType::Silver),
+            PieceType::ProBishop => Some(PieceType::Bishop),
+            PieceType::ProRook => Some(PieceType::Rook),
+            _ => None,
+        }
+    }
+
     /// Attempts to promote this piece. An in-place version of [PieceType::promoted].
     /// If the piece cannot promote, just silently does nothing.
     pub fn promote(&mut self) {
         if let Some(p) = self.promoted() {
+            *self = p;
+        }
+    }
+
+    pub fn unpromote(&mut self) {
+        if let Some(p) = self.unpromoted() {
             *self = p;
         }
     }
@@ -301,7 +318,9 @@ pub struct Position {
     board: Board,
     hands: Hands,
     player_to_move: Player,
-    ply: Option<u32>,
+    ply: u32,
+    // A stack of pieces taken and the ply they were taken on. Used for unmaking moves.
+    pieces_taken: Vec<(u32, Piece)>,
 }
 
 impl Position {
@@ -310,7 +329,8 @@ impl Position {
             board,
             hands,
             player_to_move,
-            ply,
+            ply: ply.unwrap_or(1),
+            pieces_taken: vec![],
         }
     }
     pub fn startpos() -> Self {
@@ -549,11 +569,18 @@ impl Position {
     pub fn make_move_unchecked(&mut self, mve: Move) {
         match mve {
             Move::Move { from, to, promote } => {
-                if let Some(piece) = self.board.0[to.index()].as_ref() {
+                // If we are taking a piece, remove it off the board and put it in the player's
+                // hand.
+                if let Some(piece) = self.board.0[to.index()].take() {
                     self.hands.insert_piece(self.player_to_move, piece.ty);
+                    self.pieces_taken.push((self.ply, piece));
                 }
+
+                // Move the piece
                 self.board.0[to.index()] = self.board.0[from.index()];
                 self.board.0[from.index()] = None;
+
+                // Promote if necessary
                 if promote {
                     self.board.0[to.index()].as_mut().unwrap().ty.promote();
                 }
@@ -566,24 +593,57 @@ impl Position {
                 })
             }
         }
+
+        // Update internal move counters
+        self.ply += 1;
+        self.player_to_move = self.player_to_move.opposite();
     }
 
     /// Attempts to unmake a move on the board without checking whether that move was just made.
     /// If an invalid unmove is attempted it may leave the board in an invalid state or it may
     /// panic (though, this function is still safe by rust standards).
     pub fn unmake_move_unchecked(&mut self, mve: Move) {
-        todo!();
+        self.ply -= 1;
+        self.player_to_move = self.player_to_move.opposite();
+
+        match mve {
+            Move::Move { from, to, promote } => {
+                // Unmove and unpromote
+                self.board.0[from.index()] = self.board.0[to.index()];
+
+                if promote {
+                    self.board.0[from.index()].as_mut().unwrap().ty.unpromote();
+                }
+
+                if self
+                    .pieces_taken
+                    .last()
+                    .is_some_and(|(p, _)| *p == self.ply)
+                {
+                    // If this move took a piece, replace it.
+                    let (_, taken_piece) = self.pieces_taken.pop().unwrap();
+                    self.board.0[to.index()] = Some(taken_piece);
+                    self.hands.take_piece(self.player_to_move, taken_piece.ty);
+                } else {
+                    // Otherwise we should clear that square
+                    self.board.0[to.index()] = None;
+                }
+            }
+            Move::Drop { ty, to } => {
+                self.board.0[to.index()] = None;
+                self.hands.insert_piece(self.player_to_move, ty);
+            }
+        }
     }
 }
 
 impl Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}\n{}\n", self.board, self.hands,)?;
-        if let Some(ply) = self.ply {
-            write!(f, "move {ply}, ")?;
-        }
-
-        write!(f, "{:?} to move", self.player_to_move)
+        write!(
+            f,
+            "{}\n{}\n{:?} to move",
+            self.board, self.hands, self.player_to_move
+        )
     }
 }
 
@@ -593,7 +653,82 @@ mod test {
 
     #[test]
     fn test_eval_hand() {
-        let hands = Hands::new([1, 0, 0, 0, 0, 0, 0], [0; 7]);
+        let mut hands = Hands::new([0; 7], [0; 7]);
+        hands.insert_piece(Player::Black, PieceType::Pawn);
         assert_eq!(hands.eval(), 1.15);
+    }
+
+    #[test]
+    fn test_make_unmake() {
+        // Test making and immediately unmaking a bunch of moves leaves the position unchanged
+        let startpos = Position::from_sfen(SFEN_STARTPOS);
+        let moves = startpos.possible_moves();
+
+        let mut testpos = Position::from_sfen(SFEN_STARTPOS);
+
+        for mve in moves {
+            testpos.make_move_unchecked(mve);
+            testpos.unmake_move_unchecked(mve);
+            assert_eq!(startpos, testpos);
+        }
+    }
+
+    #[test]
+    fn test_take_untake() {
+        let startpos = Position::from_sfen("9/4k4/9/9/9/9/4g4/4G4/4K4 b - 1");
+        let mut testpos = startpos.clone();
+        let mve = Move::Move {
+            from: Square::new(4, 7).unwrap(),
+            to: Square::new(4, 6).unwrap(),
+            promote: false,
+        };
+
+        testpos.make_move_unchecked(mve);
+        testpos.unmake_move_unchecked(mve);
+
+        assert_eq!(startpos, testpos);
+    }
+
+    #[test]
+    fn test_promote_unpromote() {
+        // Test promoting and unpromoting
+        let startpos = Position::from_sfen("9/4k4/9/P8/9/9/9/9/4K4 b - 1");
+        let mut testpos = startpos.clone();
+        let mve = Move::Move {
+            from: Square::new(0, 3).unwrap(),
+            to: Square::new(0, 2).unwrap(),
+            promote: true,
+        };
+
+        testpos.make_move_unchecked(mve);
+
+        assert_eq!(
+            testpos.board.0[Square::new(0, 2).unwrap().index()],
+            Some(Piece::new(PieceType::ProPawn, Player::Black))
+        );
+
+        testpos.unmake_move_unchecked(mve);
+
+        assert_eq!(startpos, testpos);
+    }
+
+    #[test]
+    fn test_drop_undrop() {
+        let startpos = Position::from_sfen("1k7/9/1K7/9/9/9/9/9/9 b G 1");
+        let mut testpos = startpos.clone();
+        let mve = Move::Drop {
+            ty: PieceType::Gold,
+            to: Square::new(1, 1).unwrap(),
+        };
+
+        dbg!(&testpos);
+
+        testpos.make_move_unchecked(mve);
+        assert_eq!(
+            testpos.board.0[Square::new(1, 1).unwrap().index()],
+            Some(Piece::new(PieceType::Gold, Player::Black))
+        );
+        testpos.unmake_move_unchecked(mve);
+        assert_eq!(startpos, testpos);
     }
 }
