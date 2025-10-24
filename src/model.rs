@@ -124,6 +124,28 @@ impl Hands {
     }
 }
 
+impl Display for Hands {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "black's hand:")?;
+
+        for (i, c) in "RBGSNLP".chars().enumerate() {
+            if self.black_hand[i] > 0 {
+                write!(f, " {}{c}", self.black_hand[i])?;
+            }
+        }
+        write!(f, "\n")?;
+
+        write!(f, "white's hand:")?;
+        for (i, c) in "RBGSNLP".chars().enumerate() {
+            if self.white_hand[i] > 0 {
+                write!(f, " {}{c}", self.white_hand[i])?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// The type of a piece.
 ///
 /// Encodes both the type and whether or not it is promoted (since not all pieces can promote).
@@ -305,7 +327,12 @@ impl Position {
 
 impl Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.board)
+        write!(f, "{}\n{}\n", self.board, self.hands,)?;
+        if let Some(ply) = self.ply {
+            write!(f, "move {ply}, ")?;
+        }
+
+        write!(f, "{:?} to move", self.player_to_move)
     }
 }
 
