@@ -19,7 +19,7 @@ pub struct Square {
 
 impl Square {
     pub fn new(x: u8, y: u8) -> Option<Self> {
-        (x >= 9 || y >= 9).then_some(Self { x, y })
+        (x < 9 && y < 9).then_some(Self { x, y })
     }
 }
 
@@ -74,6 +74,9 @@ impl Hands {
     }
 }
 
+/// The type of a piece.
+///
+/// Encodes both the type and whether or not it is promoted (since not all pieces can promote).
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PieceType {
@@ -133,6 +136,7 @@ impl PieceType {
     }
 }
 
+/// Represents a piece on the board. Encodes the piece's type and the player who owns it.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Piece {
     ty: PieceType,

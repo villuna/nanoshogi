@@ -18,7 +18,7 @@ fn main() {
                     break;
                 }
             }
-            Err(e) => eprintln!("Error: {e:?}"),
+            Err(e) => eprintln!("Error: {e}"),
         };
     }
 }

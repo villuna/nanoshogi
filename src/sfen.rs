@@ -4,7 +4,7 @@ use nom::{
     bytes::complete::tag,
     character::complete::{digit1, one_of, space1},
     combinator::opt,
-    multi::{many_m_n, many1, separated_list1},
+    multi::{many_m_n, separated_list1},
     sequence::preceded,
 };
 
@@ -35,7 +35,10 @@ fn square(input: &str) -> IResult<&str, Square> {
         one_of("123456789").map(|c| c as u8 - b'1'),
         one_of("abcdefghi").map(|c| c as u8 - b'a'),
     )
-        .map(|(y, x)| Square::new(x, y).unwrap())
+        .map(|(y, x)| {
+            dbg!(x, y);
+            Square::new(x, y).unwrap()
+        })
         .parse(input)
 }
 
@@ -166,12 +169,19 @@ fn sfen(input: &str) -> IResult<&str, Position> {
         .parse(input)
 }
 
+/// Parses a board position in sfen notation
 pub fn parse_sfen(input: &str) -> Result<Position, nom::error::Error<&str>> {
     Ok(sfen(input).finish()?.1)
 }
 
+/// Parses a whitespace-separated list of shogi moves (move or drop)
 pub fn parse_moves(input: &str) -> Result<Vec<Move>, nom::error::Error<&str>> {
-    Ok(many1(r#move).parse(input).finish()?.1)
+    Ok(separated_list1(space1, r#move).parse(input).finish()?.1)
+}
+
+/// Parses a single shogi move (move or drop)
+pub fn parse_move(input: &str) -> Result<Move, nom::error::Error<&str>> {
+    Ok(r#move(input).finish()?.1)
 }
 
 #[cfg(test)]

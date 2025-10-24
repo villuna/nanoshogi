@@ -1,32 +1,48 @@
 use std::{iter::Peekable, str::SplitWhitespace};
+use thiserror::Error;
 
 use crate::{
     sfen::{SFEN_STARTPOS, parse_moves, parse_sfen},
     types::{Move, Position},
 };
 
+/// A message passed from the GUI to the engine.
 pub enum GuiMessage {
+    /// Tells the engine to use the universal shogi interface
     Usi,
+    /// Tells the engine to start thinking from the given position, optionally after a given set
+    /// of moves.
     Position(Position, Option<Vec<Move>>),
+    /// Tells the engine to stop as soon as possible.
     Quit,
 }
 
-#[derive(Debug, Clone)]
+/// Errors that could be encountered when parsing a USI message.
+#[derive(Error, Debug, Clone)]
 pub enum MessageParseError {
+    #[error("expected message")]
     Empty,
+    #[error("unknown command: {0:?}")]
     UnknownCommand(String),
+    #[error("invalid parameters for command")]
     InvalidParameters,
+    #[error("invalid argument for parameter {param:?}")]
     InvalidArgument { param: String },
 }
 
 impl GuiMessage {
+    /// Parses a line containing a single gui message. Whitespace will be stripped from the
+    /// beginning and end.
     pub fn parse(input: impl AsRef<str>) -> Result<Self, MessageParseError> {
         parse_gui_message(input.as_ref())
     }
 }
 
+/// Arguments that could be used with the `id` engine message
 pub enum IdParam {
+    /// The engine's name
     Name(String),
+    /// The engine author's name
     Author(String),
 }
 
@@ -39,12 +55,14 @@ impl IdParam {
     }
 }
 
+/// A message passed from the GUI to the engine.
 pub enum EngineMessage {
     Id(IdParam),
     UsiOk,
 }
 
 impl EngineMessage {
+    /// Serialises the message into a string in USI format.
     pub fn to_string(&self) -> String {
         match self {
             EngineMessage::Id(id_param) => format!("id {}", id_param.to_string()),
@@ -102,14 +120,14 @@ fn parse_position_command<'i>(
     for (param, val) in params {
         match param {
             "startpos" => {
-                if !val.is_empty() || position.is_none() {
+                if !val.is_empty() || !position.is_none() {
                     return Err(MessageParseError::InvalidParameters);
                 }
                 position = Some(parse_sfen(SFEN_STARTPOS).unwrap());
             }
             "sfen" => match parse_sfen(&val) {
                 Ok(pos) => {
-                    if position.is_none() {
+                    if !position.is_none() {
                         return Err(MessageParseError::InvalidParameters);
                     }
                     position = Some(pos);
@@ -122,14 +140,14 @@ fn parse_position_command<'i>(
             },
             "moves" => match parse_moves(&val) {
                 Ok(m) => {
-                    if moves.is_none() {
+                    if !moves.is_none() {
                         return Err(MessageParseError::InvalidParameters);
                     }
                     moves = Some(m)
                 }
                 Err(_) => {
                     return Err(MessageParseError::InvalidArgument {
-                        param: "sfen".into(),
+                        param: "moves".into(),
                     });
                 }
             },
@@ -166,7 +184,7 @@ fn parse_gui_message_inner<'i>(
     }
 }
 
-pub fn parse_gui_message(input: &str) -> Result<GuiMessage, MessageParseError> {
+fn parse_gui_message(input: &str) -> Result<GuiMessage, MessageParseError> {
     let input = input.trim();
     if input.is_empty() {
         return Err(MessageParseError::Empty);
