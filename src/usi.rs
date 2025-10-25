@@ -1,3 +1,11 @@
+//! Types for representing  USI (Universal Shogi Interface) commands, as well as functions to
+//! parse them from string. These commands are either sent from the GUI to the engine
+//! ([GuiCommand]), or from the engine to the GUI ([EngineCommand]).
+
+// Unlike the sfen parser I've implemented this parser manually - this is because the USI is very
+// ambiguous and designed to be parsed manually, token by token, rather than with any kind of
+// sophisticated parsing technique.
+
 use std::{iter::Peekable, str::SplitWhitespace};
 use thiserror::Error;
 

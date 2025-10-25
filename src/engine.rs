@@ -1,3 +1,6 @@
+//! The main code for the engine. This responds to messages from the gui (parsed in the main
+//! function), handles parameters and calculation threads and whatnot.
+
 use crate::model::Position;
 use crate::usi::{EngineMessage, GuiMessage, IdParam};
 
@@ -24,6 +27,7 @@ impl Engine {
                 self.position = position;
 
                 for mve in moves {
+                    // TODO probably check these moves
                     self.position.make_move_unchecked(mve);
                 }
 

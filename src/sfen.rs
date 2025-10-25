@@ -1,3 +1,6 @@
+//! Functions for parsing game state in the SFEN format (as well as moves in long algebraic
+//! notation).
+
 use nom::{
     Finish, IResult, Parser,
     branch::alt,

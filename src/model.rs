@@ -1,3 +1,6 @@
+//! Types that encode the state of the game. The most important type in this module is
+//! [Position], which, encodes all the data necessary to record a game in play.
+
 use std::fmt::Display;
 
 use crate::sfen::{SFEN_STARTPOS, parse_sfen};
