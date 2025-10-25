@@ -123,12 +123,14 @@ impl Hands {
     }
 
     /// Adds a piece into the given player's hand.
-    pub fn insert_piece(&mut self, player: Player, piece: PieceType) {
+    pub fn insert_piece(&mut self, player: Player, mut piece: PieceType) {
+        piece.unpromote();
         self.get_hand_mut(player)[piece as usize] += 1;
     }
 
     /// Takes a piece from the given players hand. Panics if this is not possible.
-    pub fn take_piece(&mut self, player: Player, piece: PieceType) {
+    pub fn take_piece(&mut self, player: Player, mut piece: PieceType) {
+        piece.unpromote();
         let count = &mut self.get_hand_mut(player)[piece as usize];
         *count = count.checked_sub(1).unwrap();
     }
@@ -341,8 +343,49 @@ impl Position {
         parse_sfen(input).unwrap()
     }
 
+    /// Finds the position of the given player's king on the board
+    fn find_king(&self, player: Player) -> Square {
+        for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                if self.board.0[square.index()]
+                    == Some(Piece {
+                        ty: PieceType::King,
+                        player,
+                    })
+                {
+                    return square;
+                }
+            }
+        }
+
+        unreachable!()
+    }
+
+    /// Checks if the given player's king is in check
+    fn king_in_check(&self, player: Player) -> bool {
+        let attacker = player.opposite();
+        let king_square = self.find_king(player);
+
+        for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+
+                if let Some(piece) = self.board.0[square.index()]
+                    && piece.player == attacker
+                {
+                    if self.movable_squares(square).contains(&king_square) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// Returns a vector containing all the possible moves that can be made in this position.
-    pub fn possible_moves(&self) -> Vec<Move> {
+    pub fn possible_moves(&mut self) -> Vec<Move> {
         let mut res = vec![];
         for x in 0..9 {
             for y in 0..9 {
@@ -350,22 +393,30 @@ impl Position {
                 if let Some(piece) = self.board.0[square.index()]
                     && piece.player == self.player_to_move
                 {
-                    res.append(&mut self.moves_for_piece(square));
+                    res.extend(self.moves_for_piece(square));
                 }
             }
         }
 
         // TODO drops
 
-        // TODO check for check
+        // Only return the moves that would not leave the king in check
 
-        res
+        let player = self.player_to_move;
+        res.into_iter()
+            .filter(|mve| {
+                self.make_move_unchecked(*mve);
+                let in_check = self.king_in_check(player);
+                self.unmake_move_unchecked(*mve);
+                !in_check
+            })
+            .collect()
     }
 
     /// Returns all the possible moves the given piece can make.
     fn moves_for_piece(&self, from: Square) -> Vec<Move> {
         let piece = self.board.0[from.index()].as_ref().unwrap();
-        let squares = self.movable_squares(from, false);
+        let squares = self.movable_squares(from);
         let mut moves = vec![];
 
         for square in squares {
@@ -470,7 +521,7 @@ impl Position {
     /// Given the coordinate of a piece on the board, returns all the squares that piece can move
     /// to. If `disallow_check` is true, filters out all the moves that would leave the king in
     /// check.
-    fn movable_squares(&self, from: Square, disallow_check: bool) -> Vec<Square> {
+    fn movable_squares(&self, from: Square) -> Vec<Square> {
         let piece = self.board.0[from.index()].as_ref().unwrap();
 
         match piece.ty {
@@ -661,7 +712,7 @@ mod test {
     #[test]
     fn test_make_unmake() {
         // Test making and immediately unmaking a bunch of moves leaves the position unchanged
-        let startpos = Position::from_sfen(SFEN_STARTPOS);
+        let mut startpos = Position::from_sfen(SFEN_STARTPOS);
         let moves = startpos.possible_moves();
 
         let mut testpos = Position::from_sfen(SFEN_STARTPOS);
@@ -730,5 +781,22 @@ mod test {
         );
         testpos.unmake_move_unchecked(mve);
         assert_eq!(startpos, testpos);
+    }
+
+    #[test]
+    fn checkmate_no_moves() {
+        let mut checkmate = Position::from_sfen("1k7/1G7/1K7/9/9/9/9/9/9 w - 1");
+        assert_eq!(checkmate.possible_moves().len(), 0);
+    }
+
+    #[test]
+    fn king_in_check() {
+        let startpos = Position::from_sfen(SFEN_STARTPOS);
+        assert!(!startpos.king_in_check(Player::Black));
+        assert!(!startpos.king_in_check(Player::White));
+
+        let checkmate = Position::from_sfen("1k7/1G7/1K7/9/9/9/9/9/9 w - 1");
+        assert!(!checkmate.king_in_check(Player::Black));
+        assert!(checkmate.king_in_check(Player::White));
     }
 }
