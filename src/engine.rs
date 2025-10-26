@@ -1,18 +1,21 @@
 //! The main code for the engine. This responds to messages from the gui (parsed in the main
 //! function), handles parameters and calculation threads and whatnot.
 
+use std::f32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::{SmallVec, smallvec};
 
-use crate::model::{Move, Position};
+use crate::model::{Move, Player, Position};
 use crate::usi::{EngineMessage, GuiMessage, IdParam};
 
 fn iddfs(
     stop: &AtomicBool,
     level: u32,
+    mut alpha: f32,
+    beta: f32,
     position: &mut Position,
 ) -> Option<(SmallVec<[Move; 8]>, f32)> {
     if stop.load(Ordering::Relaxed) {
@@ -28,7 +31,7 @@ fn iddfs(
     for m in moves {
         position.make_move_unchecked(m);
 
-        let (mut line, eval) = iddfs(stop, level - 1, position)?;
+        let (mut line, eval) = iddfs(stop, level - 1, -beta, -alpha, position)?;
 
         if best
             .as_ref()
@@ -36,9 +39,17 @@ fn iddfs(
         {
             line.push(m);
             best = Some((line, -eval));
+
+            if -eval > alpha {
+                alpha = -eval;
+            }
         }
 
         position.unmake_move_unchecked(m);
+
+        if -eval >= beta {
+            return Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)));
+        }
     }
 
     Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)))
@@ -55,7 +66,13 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
             .map(|m| {
                 let mut position = position.clone();
                 position.make_move_unchecked(m);
-                let (mut line, eval) = iddfs(&stop, level, &mut position)?;
+                let (mut line, eval) = iddfs(
+                    &stop,
+                    level,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                    &mut position,
+                )?;
                 line.push(m);
                 Some((line, -eval))
             })
@@ -75,7 +92,11 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
             line.last()
                 .map(|m| format!("{m}"))
                 .unwrap_or("No moves".into()),
-            eval
+            eval * if position.player_to_move() == Player::Black {
+                1.0
+            } else {
+                -1.0
+            }
         );
 
         print!("line: ");

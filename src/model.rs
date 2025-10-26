@@ -373,14 +373,8 @@ impl Position {
         }
     }
 
-    pub fn clone_no_stack(&self) -> Self {
-        Self {
-            board: self.board.clone(),
-            hands: self.hands.clone(),
-            player_to_move: self.player_to_move,
-            ply: self.ply,
-            pieces_taken: vec![],
-        }
+    pub fn player_to_move(&self) -> Player {
+        self.player_to_move
     }
 
     pub fn startpos() -> Self {
