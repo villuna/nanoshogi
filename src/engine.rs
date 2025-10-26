@@ -4,14 +4,22 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::{SmallVec, smallvec};
 
 use crate::model::{Move, Position};
 use crate::usi::{EngineMessage, GuiMessage, IdParam};
 
-fn iddfs(level: u32, position: &mut Position) -> (SmallVec<[Move; 8]>, f32) {
+fn iddfs(
+    stop: &AtomicBool,
+    level: u32,
+    position: &mut Position,
+) -> Option<(SmallVec<[Move; 8]>, f32)> {
+    if stop.load(Ordering::Relaxed) {
+        return None;
+    }
     if level == 0 {
-        return (smallvec![], position.eval_relative());
+        return Some((smallvec![], position.eval_relative()));
     }
 
     let moves = position.possible_moves();
@@ -20,7 +28,7 @@ fn iddfs(level: u32, position: &mut Position) -> (SmallVec<[Move; 8]>, f32) {
     for m in moves {
         position.make_move_unchecked(m);
 
-        let (mut line, eval) = iddfs(level - 1, position);
+        let (mut line, eval) = iddfs(stop, level - 1, position)?;
 
         if best
             .as_ref()
@@ -33,13 +41,34 @@ fn iddfs(level: u32, position: &mut Position) -> (SmallVec<[Move; 8]>, f32) {
         position.unmake_move_unchecked(m);
     }
 
-    best.unwrap_or((smallvec![], f32::NEG_INFINITY))
+    Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)))
 }
 
 fn ponder(stop: Arc<AtomicBool>, mut position: Position) {
     let mut level = 1;
     while !stop.load(Ordering::Relaxed) {
-        let (line, eval) = iddfs(level, &mut position);
+        let moves = position.possible_moves();
+
+        let Some(res) = moves
+            .into_par_iter()
+            .map(|m| {
+                let mut position = position.clone();
+                position.make_move_unchecked(m);
+                let (mut line, eval) = iddfs(&stop, level, &mut position)?;
+                line.push(m);
+                Some((line, -eval))
+            })
+            .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32)>>>()
+        else {
+            eprintln!("Stopping");
+            return;
+        };
+
+        let (line, eval) = res
+            .into_iter()
+            .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
+            .unwrap();
+
         println!(
             "best move: {}, evaluation: {}",
             line.last()

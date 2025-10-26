@@ -127,7 +127,8 @@ impl Hands {
         }
     }
 
-    /// Returns the total evaluation of the material in each player's hand
+    /// Returns the total evaluation of the material in each player's hand, from the perspective of
+    /// the black player (so positive numbers means black has more material).
     pub fn eval(&self) -> f32 {
         // Pieces in the hand are worth slightly more than pieces on the board
         let scale = 1.15;
@@ -373,9 +374,11 @@ impl Position {
             .0
             .iter()
             .map(|p| p.map(|p| p.eval()).unwrap_or_default())
-            .sum();
+            .sum::<f32>();
+        let hand_score = self.hands.eval();
+        let mobility = self.mobility(Player::Black) as f32 - self.mobility(Player::White) as f32;
 
-        material_score
+        material_score + hand_score + 0.1 * mobility
     }
 
     /// Returns an evaluation of the position from the perspective of who has to move next. Useful
@@ -386,6 +389,25 @@ impl Position {
         } else {
             self.eval()
         }
+    }
+
+    // Returns all the possible squares a given player can reach, without checking for check.
+    fn mobility(&self, player: Player) -> usize {
+        let mut res = 0;
+        for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                let piece = self.board.0[square.index()].as_ref();
+
+                if let Some(piece) = piece
+                    && piece.player == player
+                {
+                    res += self.movable_squares(square).len();
+                }
+            }
+        }
+
+        res
     }
 
     /// Finds the position of the given player's king on the board
