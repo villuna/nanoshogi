@@ -5,7 +5,7 @@ use std::f32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use smallvec::{SmallVec, smallvec};
 
 use crate::model::{Move, Player, Position};
@@ -58,12 +58,20 @@ fn iddfs(
 fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
     let now = std::time::Instant::now();
     let mut level = 1;
+    let mut last_best_index = None;
+
     while !stop.load(Ordering::Relaxed) && depth.is_none_or(|d| level < d) {
-        let moves = position.possible_moves();
+        // move the best move we calculated on the last iteration to the front
+        // might help the alpha-beta algorithm work fast
+        let mut moves = position.possible_moves();
+        if let Some(idx) = last_best_index {
+            moves.swap(0, idx);
+        }
 
         let Some(res) = moves
             .into_par_iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(i, m)| {
                 let mut position = position.clone();
                 position.make_move_unchecked(m);
                 let (mut line, eval) = iddfs(
@@ -74,15 +82,15 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
                     &mut position,
                 )?;
                 line.push(m);
-                Some((line, -eval))
+                Some((line, -eval, i))
             })
-            .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32)>>>()
+            .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32, usize)>>>()
         else {
             eprintln!("Stopping");
             return;
         };
 
-        let (line, eval) = res
+        let (mut line, eval, i) = res
             .into_iter()
             .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
             .unwrap();
@@ -105,6 +113,7 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
         }
         println!("");
 
+        last_best_index = Some(i);
         level += 2;
     }
 

@@ -199,7 +199,7 @@ fn parse_gui_message_inner<'i>(
         "usi" => parse_empty_command(input, GuiMessage::Usi),
         "position" => parse_position_command(input),
         "quit" => parse_empty_command(input, GuiMessage::Quit),
-        "go" => parse_empty_command(input, GuiMessage::Go { depth: None }),
+        "go" => parse_empty_command(input, GuiMessage::Go { depth: Some(4) }),
         "stop" => parse_empty_command(input, GuiMessage::Stop),
         _ => unreachable!(),
     }
