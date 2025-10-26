@@ -44,9 +44,10 @@ fn iddfs(
     Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)))
 }
 
-fn ponder(stop: Arc<AtomicBool>, mut position: Position) {
+fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
+    let now = std::time::Instant::now();
     let mut level = 1;
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Relaxed) && depth.is_none_or(|d| level < d) {
         let moves = position.possible_moves();
 
         let Some(res) = moves
@@ -83,8 +84,10 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position) {
         }
         println!("");
 
-        level += 1;
+        level += 2;
     }
+
+    println!("Ponder took {} seconds", now.elapsed().as_secs_f64());
 }
 
 // Prints an engine message to stdout
@@ -119,13 +122,15 @@ impl Engine {
                 println!("{}", self.position);
             }
             GuiMessage::Quit => return true,
-            GuiMessage::Go => {
-                if self.stop_thread.is_none() {
-                    let stop_thread = Arc::new(AtomicBool::new(false));
-                    self.stop_thread = Some(Arc::clone(&stop_thread));
-                    let position = self.position.clone();
-                    let _thread = std::thread::spawn(|| ponder(stop_thread, position));
+            GuiMessage::Go { depth } => {
+                if let Some(stop) = self.stop_thread.take() {
+                    stop.store(true, Ordering::Relaxed);
                 }
+
+                let stop_thread = Arc::new(AtomicBool::new(false));
+                self.stop_thread = Some(Arc::clone(&stop_thread));
+                let position = self.position.clone();
+                std::thread::spawn(move || ponder(stop_thread, position, depth));
             }
             GuiMessage::Stop => {
                 if let Some(stop) = self.stop_thread.take() {

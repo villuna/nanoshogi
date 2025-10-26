@@ -3,6 +3,8 @@
 
 use std::fmt::Display;
 
+use smallvec::{SmallVec, smallvec};
+
 use crate::sfen::{SFEN_STARTPOS, parse_sfen};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -158,10 +160,22 @@ impl Hands {
         *count = count.checked_sub(1).unwrap();
     }
 
+    /// Returns whether the given player has any of the given piece in their hand.
+    pub fn player_has_piece(&self, player: Player, piece: PieceType) -> bool {
+        self.get_hand(player)[piece as usize] > 0
+    }
+
     fn get_hand_mut(&mut self, player: Player) -> &mut [u8; 7] {
         match player {
             Player::Black => &mut self.black_hand,
             Player::White => &mut self.white_hand,
+        }
+    }
+
+    fn get_hand(&self, player: Player) -> &[u8; 7] {
+        match player {
+            Player::Black => &self.black_hand,
+            Player::White => &self.white_hand,
         }
     }
 }
@@ -337,7 +351,7 @@ impl Piece {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Position {
     // I'll figure out how to do bitboards later
     board: Board,
@@ -358,6 +372,17 @@ impl Position {
             pieces_taken: vec![],
         }
     }
+
+    pub fn clone_no_stack(&self) -> Self {
+        Self {
+            board: self.board.clone(),
+            hands: self.hands.clone(),
+            player_to_move: self.player_to_move,
+            ply: self.ply,
+            pieces_taken: vec![],
+        }
+    }
+
     pub fn startpos() -> Self {
         Self::from_sfen(SFEN_STARTPOS)
     }
@@ -465,10 +490,19 @@ impl Position {
             }
         }
 
-        // TODO drops
+        for p in 0u8..7u8 {
+            // SAFETY: p is within range to be safely converted to a piece type
+            let ty: PieceType = unsafe { std::mem::transmute(p) };
+            if self.hands.player_has_piece(self.player_to_move, ty) {
+                let moves = self
+                    .droppable_squares(ty)
+                    .into_iter()
+                    .map(|to| Move::Drop { ty, to });
+                res.extend(moves);
+            }
+        }
 
         // Only return the moves that would not leave the king in check
-
         let player = self.player_to_move;
         res.into_iter()
             .filter(|mve| {
@@ -478,6 +512,37 @@ impl Position {
                 !in_check
             })
             .collect()
+    }
+
+    /// Given a certain piece type, returns all the squares the current player to move could drop
+    /// that piece type onto.
+    fn droppable_squares(&self, ty: PieceType) -> SmallVec<[Square; 128]> {
+        let mut res = smallvec![];
+
+        for x in 0..9 {
+            let mut column: SmallVec<[Square; 9]> = smallvec![];
+
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                let piece = self.board.0[square.index()].as_ref();
+
+                if let Some(piece) = piece {
+                    if ty == PieceType::Pawn
+                        && piece.ty == PieceType::Pawn
+                        && piece.player == self.player_to_move
+                    {
+                        column.clear();
+                        break;
+                    }
+                } else {
+                    column.push(square);
+                }
+            }
+
+            res.extend(column);
+        }
+
+        res
     }
 
     /// Returns all the possible moves the given piece can make.
@@ -525,8 +590,8 @@ impl Position {
         from: Square,
         offsets: &[(i8, i8)],
         moving_player: Player,
-    ) -> Vec<Square> {
-        let mut res = vec![];
+    ) -> SmallVec<[Square; 128]> {
+        let mut res = smallvec![];
 
         for &(mut offset) in offsets {
             if moving_player == Player::Black {
@@ -555,8 +620,8 @@ impl Position {
         from: Square,
         offsets: &[(i8, i8)],
         moving_player: Player,
-    ) -> Vec<Square> {
-        let mut res = vec![];
+    ) -> SmallVec<[Square; 128]> {
+        let mut res = smallvec![];
 
         for &(mut offset) in offsets {
             if moving_player == Player::Black {
@@ -588,7 +653,7 @@ impl Position {
     /// Given the coordinate of a piece on the board, returns all the squares that piece can move
     /// to. If `disallow_check` is true, filters out all the moves that would leave the king in
     /// check.
-    fn movable_squares(&self, from: Square) -> Vec<Square> {
+    fn movable_squares(&self, from: Square) -> SmallVec<[Square; 128]> {
         let piece = self.board.0[from.index()].as_ref().unwrap();
 
         match piece.ty {
@@ -678,7 +743,7 @@ impl Position {
     /// Returns whether a player could theoretically move a piece to that square (i.e., the square
     /// is empty or contains an enemy piece)
     fn square_is_available(&self, target: Square, moving_player: Player) -> bool {
-        self.board.0[target.index()].is_none_or(|piece| piece.player == moving_player.opposite())
+        self.board.0[target.index()].is_none_or(|piece| piece.player != moving_player)
     }
 
     /// Attempts to make a move on the board without checking whether that move can be made.

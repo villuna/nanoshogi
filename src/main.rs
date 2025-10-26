@@ -1,9 +1,5 @@
-use crate::{engine::Engine, usi::GuiMessage};
-
-mod engine;
-mod model;
-mod sfen;
-mod usi;
+use nanoshogi::engine::Engine;
+use nanoshogi::usi::GuiMessage;
 
 fn main() {
     eprintln!("Welcome to nanoshogi - the exceedingly okay shogi bot");

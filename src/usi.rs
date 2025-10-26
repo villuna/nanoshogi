@@ -15,6 +15,7 @@ use crate::{
 };
 
 /// A message passed from the GUI to the engine.
+#[derive(Clone, Debug)]
 pub enum GuiMessage {
     /// Tells the engine to use the universal shogi interface
     Usi,
@@ -24,7 +25,9 @@ pub enum GuiMessage {
     Position(Position, Vec<Move>),
     /// Tells the engine to stop as soon as possible.
     Quit,
-    Go,
+    Go {
+        depth: Option<u32>,
+    },
     Stop,
 }
 
@@ -50,6 +53,7 @@ impl GuiMessage {
 }
 
 /// Arguments that could be used with the `id` engine message
+#[derive(Clone, Debug)]
 pub enum IdParam {
     /// The engine's name
     Name(String),
@@ -67,6 +71,7 @@ impl IdParam {
 }
 
 /// A message passed from the GUI to the engine.
+#[derive(Clone, Debug)]
 pub enum EngineMessage {
     Id(IdParam),
     UsiOk,
@@ -194,7 +199,7 @@ fn parse_gui_message_inner<'i>(
         "usi" => parse_empty_command(input, GuiMessage::Usi),
         "position" => parse_position_command(input),
         "quit" => parse_empty_command(input, GuiMessage::Quit),
-        "go" => parse_empty_command(input, GuiMessage::Go),
+        "go" => parse_empty_command(input, GuiMessage::Go { depth: Some(4) }),
         "stop" => parse_empty_command(input, GuiMessage::Stop),
         _ => unreachable!(),
     }
