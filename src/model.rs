@@ -65,6 +65,12 @@ impl Square {
     }
 }
 
+impl Display for Square {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.x + 1, (self.y + b'a') as char)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Move {
     Move {
@@ -76,6 +82,19 @@ pub enum Move {
         ty: PieceType,
         to: Square,
     },
+}
+
+impl Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Move::Move { from, to, promote } => {
+                write!(f, "{}{}{}", from, to, if *promote { "+" } else { " " })
+            }
+            Move::Drop { ty, to } => {
+                write!(f, "{}*{}", ty.to_string().to_ascii_uppercase(), to)
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
@@ -344,6 +363,29 @@ impl Position {
 
     pub fn from_sfen(input: &str) -> Self {
         parse_sfen(input).unwrap()
+    }
+
+    /// Returns an evaluation of the position from black's perspective (so, positive numbers means
+    /// the position is good for black, negative means good for white).
+    pub fn eval(&self) -> f32 {
+        let material_score = self
+            .board
+            .0
+            .iter()
+            .map(|p| p.map(|p| p.eval()).unwrap_or_default())
+            .sum();
+
+        material_score
+    }
+
+    /// Returns an evaluation of the position from the perspective of who has to move next. Useful
+    /// for the negamax algorithm.
+    pub fn eval_relative(&self) -> f32 {
+        if self.player_to_move == Player::White {
+            -self.eval()
+        } else {
+            self.eval()
+        }
     }
 
     /// Finds the position of the given player's king on the board

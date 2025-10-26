@@ -24,6 +24,8 @@ pub enum GuiMessage {
     Position(Position, Vec<Move>),
     /// Tells the engine to stop as soon as possible.
     Quit,
+    Go,
+    Stop,
 }
 
 /// Errors that could be encountered when parsing a USI message.
@@ -80,7 +82,7 @@ impl EngineMessage {
     }
 }
 
-const GUI_COMMANDS: &[&str] = &["usi", "position", "quit"];
+const GUI_COMMANDS: &[&str] = &["usi", "position", "quit", "go", "stop"];
 
 fn get_params<'i>(
     input: &mut Peekable<impl Iterator<Item = &'i str>>,
@@ -192,6 +194,8 @@ fn parse_gui_message_inner<'i>(
         "usi" => parse_empty_command(input, GuiMessage::Usi),
         "position" => parse_position_command(input),
         "quit" => parse_empty_command(input, GuiMessage::Quit),
+        "go" => parse_empty_command(input, GuiMessage::Go),
+        "stop" => parse_empty_command(input, GuiMessage::Stop),
         _ => unreachable!(),
     }
 }

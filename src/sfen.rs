@@ -11,10 +11,11 @@ use nom::{
     sequence::preceded,
 };
 
+use crate::model::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
+
+/// The SFEN string for the starting position of a shogi game.
 pub const SFEN_STARTPOS: &'static str =
     "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
-
-use crate::model::{Board, Hands, Move, Piece, PieceType, Player, Position, Square};
 
 fn hand_piece(piece_char: char) -> impl Fn(&str) -> IResult<&str, u8> {
     move |input| {
@@ -207,17 +208,17 @@ fn sfen(input: &str) -> IResult<&str, Position> {
         .parse(input)
 }
 
-/// Parses a board position in sfen notation
+/// Parses a position in sfen notation.
 pub fn parse_sfen(input: &str) -> Result<Position, nom::error::Error<&str>> {
     Ok(sfen(input).finish()?.1)
 }
 
-/// Parses a whitespace-separated list of shogi moves (move or drop)
+/// Parses a whitespace-separated list of shogi moves (move or drop).
 pub fn parse_moves(input: &str) -> Result<Vec<Move>, nom::error::Error<&str>> {
     Ok(separated_list1(space1, r#move).parse(input).finish()?.1)
 }
 
-/// Parses a single shogi move (move or drop)
+/// Parses a single shogi move (move or drop).
 pub fn parse_move(input: &str) -> Result<Move, nom::error::Error<&str>> {
     Ok(r#move(input).finish()?.1)
 }
