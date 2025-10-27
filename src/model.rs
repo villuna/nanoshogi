@@ -15,6 +15,33 @@ impl Board {
     pub fn new(board: [Option<Piece>; 81]) -> Self {
         Self(board)
     }
+
+    pub fn find_kings(&self) -> (Square, Square) {
+        let mut black_king = None;
+        let mut white_king = None;
+
+        'outer: for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                if let Some(Piece {
+                    ty: PieceType::King,
+                    player,
+                }) = self.0[square.index()]
+                {
+                    match player {
+                        Player::Black => black_king = Some(square),
+                        Player::White => white_king = Some(square),
+                    }
+
+                    if black_king.is_some() && white_king.is_some() {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+
+        (black_king.unwrap(), white_king.unwrap())
+    }
 }
 
 impl Display for Board {
@@ -364,16 +391,23 @@ pub struct Position {
     // A stack of pieces taken and the ply they were taken on. Used for unmaking moves.
     #[derivative(Hash = "ignore", PartialEq = "ignore")]
     pieces_taken: Vec<(u32, Piece)>,
+    #[derivative(Hash = "ignore", PartialEq = "ignore")]
+    white_king: Square,
+    #[derivative(Hash = "ignore", PartialEq = "ignore")]
+    black_king: Square,
 }
 
 impl Position {
     pub fn new(board: Board, hands: Hands, player_to_move: Player, ply: Option<u32>) -> Self {
+        let (black_king, white_king) = board.find_kings();
         Self {
             board,
             hands,
             player_to_move,
             ply: ply.unwrap_or(1),
             pieces_taken: vec![],
+            black_king,
+            white_king,
         }
     }
 
@@ -435,21 +469,10 @@ impl Position {
 
     /// Finds the position of the given player's king on the board
     fn find_king(&self, player: Player) -> Square {
-        for x in 0..9 {
-            for y in 0..9 {
-                let square = Square::new(x, y).unwrap();
-                if self.board.0[square.index()]
-                    == Some(Piece {
-                        ty: PieceType::King,
-                        player,
-                    })
-                {
-                    return square;
-                }
-            }
+        match player {
+            Player::Black => self.black_king,
+            Player::White => self.white_king,
         }
-
-        unreachable!()
     }
 
     /// Checks if the given player's king is in check
@@ -765,6 +788,14 @@ impl Position {
                 if promote {
                     self.board.0[to.index()].as_mut().unwrap().ty.promote();
                 }
+
+                // Update position of king if necessary
+                if self.board.0[to.index()].as_ref().unwrap().ty == PieceType::King {
+                    match self.player_to_move {
+                        Player::Black => self.black_king = to,
+                        Player::White => self.white_king = to,
+                    }
+                }
             }
             Move::Drop { ty, to } => {
                 self.hands.take_piece(self.player_to_move, ty);
@@ -794,6 +825,14 @@ impl Position {
 
                 if promote {
                     self.board.0[from.index()].as_mut().unwrap().ty.unpromote();
+                }
+
+                // Update position of king if necessary
+                if self.board.0[from.index()].as_ref().unwrap().ty == PieceType::King {
+                    match self.player_to_move {
+                        Player::Black => self.black_king = from,
+                        Player::White => self.white_king = from,
+                    }
                 }
 
                 if self

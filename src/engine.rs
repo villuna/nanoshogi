@@ -99,6 +99,10 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
     let mut old_cache = AHashMap::<Position, (SmallVec<[Move; 8]>, f32)>::new();
     let cache = RwLock::new(AHashMap::new());
 
+    let mut alpha = f32::NEG_INFINITY;
+    let mut beta = f32::INFINITY;
+    let mut last_eval = None;
+
     while !stop.load(Ordering::Relaxed) && depth.is_none_or(|d| level < d) {
         let mut moves = position.possible_moves();
         let mut cache_handle = cache.write().unwrap();
@@ -122,6 +126,13 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
         let cache_hits = AtomicU64::new(0);
         let nodes = AtomicU64::new(0);
 
+        if let Some(eval) = last_eval {
+            // Update aspiration windows based on what we would expect the eval to be
+            // TODO widen these windows and research if the real eval is outside this window
+            alpha = eval - 0.25;
+            beta = eval + 0.25;
+        }
+
         let Some(res) = moves
             .into_par_iter()
             .map(|m| {
@@ -130,8 +141,8 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
                 let (mut line, eval) = iddfs(
                     &stop,
                     level,
-                    f32::NEG_INFINITY,
-                    f32::INFINITY,
+                    alpha,
+                    beta,
                     &mut position,
                     &cache,
                     &old_cache,
@@ -174,6 +185,7 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
             cache_hits.load(Ordering::SeqCst)
         );
 
+        last_eval = Some(eval);
         level += 2;
     }
 
