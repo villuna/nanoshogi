@@ -1,11 +1,13 @@
 //! The main code for the engine. This responds to messages from the gui (parsed in the main
 //! function), handles parameters and calculation threads and whatnot.
 
-use std::f32;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
+use std::{cmp, f32};
 
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use ahash::AHashMap;
+use ordered_float::OrderedFloat;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::{SmallVec, smallvec};
 
 use crate::model::{Move, Player, Position};
@@ -17,21 +19,55 @@ fn iddfs(
     mut alpha: f32,
     beta: f32,
     position: &mut Position,
+    cache: &RwLock<AHashMap<Position, (SmallVec<[Move; 8]>, f32)>>,
+    old_cache: &AHashMap<Position, (SmallVec<[Move; 8]>, f32)>,
+    cache_hits: &AtomicU64,
+    nodes: &AtomicU64,
 ) -> Option<(SmallVec<[Move; 8]>, f32)> {
     if stop.load(Ordering::Relaxed) {
         return None;
     }
+
+    nodes.fetch_add(1, Ordering::Relaxed);
+
     if level == 0 {
         return Some((smallvec![], position.eval_relative()));
     }
 
-    let moves = position.possible_moves();
+    if let Some(res) = cache.read().unwrap().get(position) {
+        cache_hits.fetch_add(1, Ordering::Relaxed);
+        return Some(res.clone());
+    }
+
+    let mut moves = position.possible_moves();
+    moves.sort_by_cached_key(|m| {
+        position.make_move_unchecked(*m);
+        let key = old_cache
+            .get(&position)
+            .map(|(_, eval)| -*eval)
+            .unwrap_or(f32::NEG_INFINITY);
+        position.unmake_move_unchecked(*m);
+
+        // We want to sort best to worst, so highest to lowest (hence the cmp Reverse)
+        cmp::Reverse(OrderedFloat(key))
+    });
+
     let mut best: Option<(SmallVec<[Move; 8]>, f32)> = None;
 
     for m in moves {
         position.make_move_unchecked(m);
 
-        let (mut line, eval) = iddfs(stop, level - 1, -beta, -alpha, position)?;
+        let (mut line, eval) = iddfs(
+            stop,
+            level - 1,
+            -beta,
+            -alpha,
+            position,
+            cache,
+            old_cache,
+            cache_hits,
+            nodes,
+        )?;
 
         if best
             .as_ref()
@@ -48,30 +84,47 @@ fn iddfs(
         position.unmake_move_unchecked(m);
 
         if -eval >= beta {
-            return Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)));
+            break;
         }
     }
 
-    Some(best.unwrap_or((smallvec![], f32::NEG_INFINITY)))
+    let res = best.unwrap_or((smallvec![], f32::NEG_INFINITY));
+    cache.write().unwrap().insert(position.clone(), res.clone());
+    Some(res)
 }
 
 fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
     let now = std::time::Instant::now();
     let mut level = 1;
-    let mut last_best_index = None;
+    let mut old_cache = AHashMap::<Position, (SmallVec<[Move; 8]>, f32)>::new();
+    let cache = RwLock::new(AHashMap::new());
 
     while !stop.load(Ordering::Relaxed) && depth.is_none_or(|d| level < d) {
-        // move the best move we calculated on the last iteration to the front
-        // might help the alpha-beta algorithm work fast
         let mut moves = position.possible_moves();
-        if let Some(idx) = last_best_index {
-            moves.swap(0, idx);
-        }
+        let mut cache_handle = cache.write().unwrap();
+
+        std::mem::swap(&mut old_cache, &mut cache_handle);
+        cache_handle.clear();
+        drop(cache_handle);
+
+        moves.sort_by_cached_key(|m| {
+            position.make_move_unchecked(*m);
+            let key = old_cache
+                .get(&position)
+                .map(|(_, eval)| -*eval)
+                .unwrap_or(f32::NEG_INFINITY);
+            position.unmake_move_unchecked(*m);
+
+            // We want to sort best to worst, so highest to lowest (hence the cmp Reverse)
+            cmp::Reverse(OrderedFloat(key))
+        });
+
+        let cache_hits = AtomicU64::new(0);
+        let nodes = AtomicU64::new(0);
 
         let Some(res) = moves
             .into_par_iter()
-            .enumerate()
-            .map(|(i, m)| {
+            .map(|m| {
                 let mut position = position.clone();
                 position.make_move_unchecked(m);
                 let (mut line, eval) = iddfs(
@@ -80,17 +133,21 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
                     f32::NEG_INFINITY,
                     f32::INFINITY,
                     &mut position,
+                    &cache,
+                    &old_cache,
+                    &cache_hits,
+                    &nodes,
                 )?;
                 line.push(m);
-                Some((line, -eval, i))
+                Some((line, -eval))
             })
-            .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32, usize)>>>()
+            .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32)>>>()
         else {
-            eprintln!("Stopping");
+            eprintln!("stopped before reaching max depth");
             return;
         };
 
-        let (mut line, eval, i) = res
+        let (line, eval) = res
             .into_iter()
             .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
             .unwrap();
@@ -111,9 +168,12 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
         for m in line.iter().rev() {
             print!("{m} ");
         }
-        println!("");
+        println!(
+            "\nnodes explored: {}, cache hits: {}",
+            nodes.load(Ordering::SeqCst),
+            cache_hits.load(Ordering::SeqCst)
+        );
 
-        last_best_index = Some(i);
         level += 2;
     }
 

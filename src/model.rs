@@ -3,6 +3,7 @@
 
 use std::fmt::Display;
 
+use derivative::Derivative;
 use smallvec::{SmallVec, smallvec};
 
 use crate::sfen::{SFEN_STARTPOS, parse_sfen};
@@ -351,14 +352,17 @@ impl Piece {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Derivative, Eq)]
+#[derivative(Hash, PartialEq)]
 pub struct Position {
     // I'll figure out how to do bitboards later
     board: Board,
     hands: Hands,
+    #[derivative(Hash = "ignore", PartialEq = "ignore")]
     player_to_move: Player,
     ply: u32,
     // A stack of pieces taken and the ply they were taken on. Used for unmaking moves.
+    #[derivative(Hash = "ignore", PartialEq = "ignore")]
     pieces_taken: Vec<(u32, Piece)>,
 }
 
