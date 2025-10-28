@@ -118,7 +118,7 @@ impl Display for Move {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Move::Move { from, to, promote } => {
-                write!(f, "{}{}{}", from, to, if *promote { "+" } else { " " })
+                write!(f, "{}{}{}", from, to, if *promote { "+" } else { "" })
             }
             Move::Drop { ty, to } => {
                 write!(f, "{}*{}", ty.to_string().to_ascii_uppercase(), to)

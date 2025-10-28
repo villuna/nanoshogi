@@ -3,15 +3,16 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::{cmp, f32};
+use std::time::Instant;
+use std::{cmp, f32, thread};
 
 use ahash::AHashMap;
 use ordered_float::OrderedFloat;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::{SmallVec, smallvec};
 
-use crate::model::{Move, Player, Position};
-use crate::usi::{EngineMessage, GuiMessage, IdParam};
+use crate::model::{Move, Position};
+use crate::usi::{GoParams, GuiMessage};
 
 fn iddfs(
     stop: &AtomicBool,
@@ -93,8 +94,18 @@ fn iddfs(
     Some(res)
 }
 
-fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
-    let now = std::time::Instant::now();
+fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
+    // If the move has a time limit spawn a thread that automatically stops this thread when
+    // time is up.
+    if let Some(time) = params.move_time {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            thread::sleep(time);
+            stop.store(true, Ordering::Relaxed);
+        });
+    }
+
+    let start_time = Instant::now();
     let mut level = 1;
     let mut old_cache = AHashMap::<Position, (SmallVec<[Move; 8]>, f32)>::new();
     let cache = RwLock::new(AHashMap::new());
@@ -102,8 +113,9 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
     let mut alpha = f32::NEG_INFINITY;
     let mut beta = f32::INFINITY;
     let mut last_eval = None;
+    let mut best_line = None;
 
-    while !stop.load(Ordering::Relaxed) && depth.is_none_or(|d| level < d) {
+    while !stop.load(Ordering::Relaxed) && params.depth.is_none_or(|d| level < d) {
         let mut moves = position.possible_moves();
         let mut cache_handle = cache.write().unwrap();
 
@@ -154,8 +166,7 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
             })
             .collect::<Option<Vec<(SmallVec<[Move; 8]>, f32)>>>()
         else {
-            eprintln!("stopped before reaching max depth");
-            return;
+            break;
         };
 
         let (line, eval) = res
@@ -163,39 +174,34 @@ fn ponder(stop: Arc<AtomicBool>, mut position: Position, depth: Option<u32>) {
             .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
             .unwrap();
 
-        println!(
-            "best move: {}, evaluation: {}",
-            line.last()
-                .map(|m| format!("{m}"))
-                .unwrap_or("No moves".into()),
-            eval * if position.player_to_move() == Player::Black {
-                1.0
-            } else {
-                -1.0
-            }
-        );
-
-        print!("line: ");
-        for m in line.iter().rev() {
-            print!("{m} ");
-        }
-        println!(
-            "\nnodes explored: {}, cache hits: {}",
-            nodes.load(Ordering::SeqCst),
-            cache_hits.load(Ordering::SeqCst)
-        );
-
+        best_line = Some(line);
         last_eval = Some(eval);
+
+        // Print information about the current state of the search
+        print!(
+            "info depth {} time {} score cp {} nodes {} pv",
+            level + 1,
+            start_time.elapsed().as_millis(),
+            (eval * 100.0).round() as u32,
+            nodes.load(Ordering::Relaxed),
+        );
+
+        for m in best_line.as_ref().unwrap().iter().rev() {
+            print!(" {m}");
+        }
+        println!("");
+
         level += 2;
     }
 
-    println!("Ponder took {} seconds", now.elapsed().as_secs_f64());
-}
-
-// Prints an engine message to stdout
-fn print_msg(msg: &EngineMessage) {
-    let serialised = msg.to_string();
-    println!("{serialised}");
+    // Print the best move after finishing search
+    if let Some(line) = best_line {
+        print!("bestmove {}", line.last().unwrap());
+        if line.len() > 1 {
+            print!(" ponder {}", line[line.len() - 2]);
+        }
+        println!("");
+    }
 }
 
 pub struct Engine {
@@ -220,11 +226,9 @@ impl Engine {
                     // TODO probably check these moves
                     self.position.make_move_unchecked(mve);
                 }
-
-                println!("{}", self.position);
             }
             GuiMessage::Quit => return true,
-            GuiMessage::Go { depth } => {
+            GuiMessage::Go(params) => {
                 if let Some(stop) = self.stop_thread.take() {
                     stop.store(true, Ordering::Relaxed);
                 }
@@ -232,12 +236,15 @@ impl Engine {
                 let stop_thread = Arc::new(AtomicBool::new(false));
                 self.stop_thread = Some(Arc::clone(&stop_thread));
                 let position = self.position.clone();
-                std::thread::spawn(move || ponder(stop_thread, position, depth));
+                thread::spawn(move || ponder(params, stop_thread, position));
             }
             GuiMessage::Stop => {
                 if let Some(stop) = self.stop_thread.take() {
                     stop.store(true, Ordering::Relaxed);
                 }
+            }
+            GuiMessage::PrintPosition => {
+                println!("{}", self.position);
             }
         }
 
@@ -246,13 +253,13 @@ impl Engine {
 
     fn handle_usi(&self) {
         // Identify the engine
-        print_msg(&EngineMessage::Id(IdParam::Name("nanoshogi".into())));
-        print_msg(&EngineMessage::Id(IdParam::Author("villuna".into())));
+        println!("id name nanoshogi");
+        println!("id author villuna");
 
         // Print possible options
         // if i get any
 
         // Print ok
-        print_msg(&EngineMessage::UsiOk);
+        println!("usiok");
     }
 }

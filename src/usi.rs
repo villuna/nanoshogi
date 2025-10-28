@@ -6,7 +6,8 @@
 // ambiguous and designed to be parsed manually, token by token, rather than with any kind of
 // sophisticated parsing technique.
 
-use std::{iter::Peekable, str::SplitWhitespace};
+use ahash::AHashSet;
+use std::{iter::Peekable, str::SplitWhitespace, time::Duration};
 use thiserror::Error;
 
 use crate::{
@@ -23,12 +24,34 @@ pub enum GuiMessage {
     /// of moves.
     /// If no moves are given, the vector will be empty.
     Position(Position, Vec<Move>),
-    /// Tells the engine to stop as soon as possible.
+    /// Tells the engine to terminate as soon as possible.
     Quit,
-    Go {
-        depth: Option<u32>,
-    },
+    /// Tells the engine to start searching for the best move from this position.
+    Go(GoParams),
+    /// Tells the engine to stop searching and print the best move it found.
     Stop,
+    /// Tells the engine to print the current position to the terminal. This is a custom command not
+    /// in the usi spec that I use for debugging.
+    PrintPosition,
+}
+
+/// Parameters that can be passed into the 'go' gui command.
+#[derive(Clone, Debug, Default)]
+pub struct GoParams {
+    /// The moves to start searching from at the root of the tree.
+    pub search_moves: Option<Vec<Move>>,
+    /// The time left on black's clock.
+    pub black_time: Option<Duration>,
+    /// The time left on white's clock.
+    pub white_time: Option<Duration>,
+    /// Black's time increment (how much extra time they get per move).
+    pub black_increment: Option<Duration>,
+    /// White's time increment (how much extra time they get per move).
+    pub white_increment: Option<Duration>,
+    /// The number of moves deep the engine should search before stopping.
+    pub depth: Option<u32>,
+    /// The amount of time the engine has to think about its move.
+    pub move_time: Option<Duration>,
 }
 
 /// Errors that could be encountered when parsing a USI message.
@@ -52,51 +75,20 @@ impl GuiMessage {
     }
 }
 
-/// Arguments that could be used with the `id` engine message
-#[derive(Clone, Debug)]
-pub enum IdParam {
-    /// The engine's name
-    Name(String),
-    /// The engine author's name
-    Author(String),
-}
-
-impl IdParam {
-    fn to_string(&self) -> String {
-        match self {
-            IdParam::Name(name) => format!("name {name}"),
-            IdParam::Author(author) => format!("author {author}"),
-        }
-    }
-}
-
-/// A message passed from the GUI to the engine.
-#[derive(Clone, Debug)]
-pub enum EngineMessage {
-    Id(IdParam),
-    UsiOk,
-}
-
-impl EngineMessage {
-    /// Serialises the message into a string in USI format.
-    pub fn to_string(&self) -> String {
-        match self {
-            EngineMessage::Id(id_param) => format!("id {}", id_param.to_string()),
-            EngineMessage::UsiOk => "usiok".to_string(),
-        }
-    }
-}
-
-const GUI_COMMANDS: &[&str] = &["usi", "position", "quit", "go", "stop"];
-
 fn get_params<'i>(
     input: &mut Peekable<impl Iterator<Item = &'i str>>,
     ids: &[&str],
 ) -> Option<Vec<(&'i str, String)>> {
     let mut res = vec![];
+    // store which params we've parsed already to disallow duplicates
+    let mut params_parsed = AHashSet::new();
 
     while let Some(token) = input.next() {
         if ids.contains(&token) {
+            if params_parsed.contains(token) {
+                return None;
+            }
+            params_parsed.insert(token);
             let mut arg = String::new();
 
             loop {
@@ -136,18 +128,10 @@ fn parse_position_command<'i>(
     for (param, val) in params {
         match param {
             "startpos" => {
-                if !val.is_empty() || !position.is_none() {
-                    return Err(MessageParseError::InvalidParameters);
-                }
                 position = Some(parse_sfen(SFEN_STARTPOS).unwrap());
             }
             "sfen" => match parse_sfen(&val) {
-                Ok(pos) => {
-                    if !position.is_none() {
-                        return Err(MessageParseError::InvalidParameters);
-                    }
-                    position = Some(pos);
-                }
+                Ok(pos) => position = Some(pos),
                 Err(_) => {
                     return Err(MessageParseError::InvalidArgument {
                         param: "sfen".into(),
@@ -155,12 +139,7 @@ fn parse_position_command<'i>(
                 }
             },
             "moves" => match parse_moves(&val) {
-                Ok(m) => {
-                    if !moves.is_none() {
-                        return Err(MessageParseError::InvalidParameters);
-                    }
-                    moves = Some(m)
-                }
+                Ok(m) => moves = Some(m),
                 Err(_) => {
                     return Err(MessageParseError::InvalidArgument {
                         param: "moves".into(),
@@ -175,6 +154,99 @@ fn parse_position_command<'i>(
         position.unwrap(),
         moves.unwrap_or_default(),
     ))
+}
+
+fn parse_go_command<'i>(input: &mut TokenStream) -> Result<GuiMessage, MessageParseError> {
+    let mut go_params = GoParams::default();
+    let Some(params) = get_params(
+        input,
+        &[
+            "searchmoves",
+            "ponder",
+            "btime",
+            "wtime",
+            "binc",
+            "winc",
+            "movestogo",
+            "depth",
+            "nodes",
+            "movetime",
+            "mate",
+            "infinite",
+        ],
+    ) else {
+        return Err(MessageParseError::InvalidParameters);
+    };
+
+    for (param, val) in params {
+        match param {
+            "searchmoves" => match parse_moves(&val) {
+                Ok(moves) => go_params.search_moves = Some(moves),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "btime" => match val.parse::<u64>() {
+                Ok(millis) => go_params.black_time = Some(Duration::from_millis(millis)),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "wtime" => match val.parse::<u64>() {
+                Ok(millis) => go_params.white_time = Some(Duration::from_millis(millis)),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "binc" => match val.parse::<u64>() {
+                Ok(millis) => go_params.black_increment = Some(Duration::from_millis(millis)),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "winc" => match val.parse::<u64>() {
+                Ok(millis) => go_params.white_increment = Some(Duration::from_millis(millis)),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "depth" => match val.parse::<u32>() {
+                Ok(depth) => go_params.depth = Some(depth),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "movetime" => match val.parse::<u64>() {
+                Ok(millis) => go_params.move_time = Some(Duration::from_millis(millis)),
+                Err(_) => {
+                    return Err(MessageParseError::InvalidArgument {
+                        param: param.into(),
+                    });
+                }
+            },
+            "infinite" => {
+                go_params.move_time = None;
+            }
+            "nodes" | "ponder" | "movestogo" | "byoyomi" | "mate" => {
+                eprintln!("warning: {param} parameter not supported")
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    Ok(GuiMessage::Go(go_params))
 }
 
 // Checks if the command is empty (i.e. there are no more tokens in the stream), and if so returns
@@ -199,11 +271,22 @@ fn parse_gui_message_inner<'i>(
         "usi" => parse_empty_command(input, GuiMessage::Usi),
         "position" => parse_position_command(input),
         "quit" => parse_empty_command(input, GuiMessage::Quit),
-        "go" => parse_empty_command(input, GuiMessage::Go { depth: None }),
+        "go" => parse_go_command(input),
         "stop" => parse_empty_command(input, GuiMessage::Stop),
+        "print" | "printposition" => parse_empty_command(input, GuiMessage::PrintPosition),
         _ => unreachable!(),
     }
 }
+
+const GUI_COMMANDS: &[&str] = &[
+    "usi",
+    "position",
+    "quit",
+    "go",
+    "stop",
+    "print",
+    "printposition",
+];
 
 fn parse_gui_message(input: &str) -> Result<GuiMessage, MessageParseError> {
     let input = input.trim();
