@@ -628,9 +628,9 @@ impl Position {
 
         for square in squares {
             let is_promote_square = if piece.player == Player::Black {
-                square.y <= 2
+                square.y <= 2 || from.y <= 2
             } else {
-                square.y >= 6
+                square.y >= 6 || from.y >= 6
             };
 
             if is_promote_square && piece.ty.can_promote() {
