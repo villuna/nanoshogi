@@ -4,6 +4,7 @@
 use std::fmt::Display;
 
 use derivative::Derivative;
+use ordered_float::OrderedFloat;
 use smallvec::{SmallVec, smallvec};
 
 use crate::sfen::{SFEN_STARTPOS, parse_sfen};
@@ -535,6 +536,59 @@ impl Position {
             .collect()
     }
 
+    // Returns all the moves from this position that are captures. The move ordering will be
+    // optimised for quiescence search - specifically it will be in lexicographic order by
+    // (-target_value, attacker_value)
+    pub fn captures(&mut self) -> Vec<Move> {
+        let mut res = Vec::new();
+
+        // TODO maybe not get *all* moves and filter out captures
+        for x in 0..9 {
+            for y in 0..9 {
+                let square = Square::new(x, y).unwrap();
+                if let Some(piece) = self.board.0[square.index()]
+                    && piece.player == self.player_to_move
+                {
+                    res.extend(self.moves_for_piece(square).into_iter().filter(|mve| {
+                        // We used the moves_for_piece function so there will be no drops.
+                        let Move::Move { to, .. } = mve else {
+                            unreachable!()
+                        };
+                        self.board.0[to.index()].is_some()
+                    }));
+                }
+            }
+        }
+
+        // Only return the moves that would not leave the king in check
+        let player = self.player_to_move;
+        res = res
+            .into_iter()
+            .filter(|mve| {
+                self.make_move_unchecked(*mve);
+                let in_check = self.king_in_check(player);
+                self.unmake_move_unchecked(*mve);
+                !in_check
+            })
+            .collect();
+
+        // Sort by most valuable target - least valuable aggressor
+        res.sort_by_key(|mx| {
+            let Move::Move { from, to, .. } = mx else {
+                unreachable!()
+            };
+            let target = self.board.0[to.index()].as_ref().unwrap();
+            let aggressor = self.board.0[from.index()].as_ref().unwrap();
+
+            (
+                OrderedFloat(-target.ty.material()),
+                OrderedFloat(aggressor.ty.material()),
+            )
+        });
+
+        res
+    }
+
     /// Given a certain piece type, returns all the squares the current player to move could drop
     /// that piece type onto.
     fn droppable_squares(&self, ty: PieceType) -> SmallVec<[Square; 128]> {
@@ -870,6 +924,16 @@ impl Display for Position {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_eval_board() {
+        let pos =
+            Position::from_sfen("lnsgk1+Rnl/9/pppppp3/6p1p/9/9/PPPPPPS1P/1B7/LNSGKG1NL w RBGSP2p");
+
+        dbg!(pos.eval());
+        dbg!(pos.eval_relative());
+        assert!(false);
+    }
 
     #[test]
     fn test_eval_hand() {

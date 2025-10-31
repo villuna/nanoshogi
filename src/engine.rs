@@ -14,6 +14,68 @@ use smallvec::{SmallVec, smallvec};
 use crate::model::{Move, Position};
 use crate::usi::{GoParams, GuiMessage};
 
+// Perform quiescence search - that is, continue searching but only evaluate captures until the
+// position is "quiet" - no more captures left.
+//
+// Implementation based off the pseudocode from chessprogramming.org's page on quiescence search.
+fn quiesce(
+    stop: &AtomicBool,
+    mut alpha: f32,
+    beta: f32,
+    position: &mut Position,
+    cache: &RwLock<AHashMap<Position, (SmallVec<[Move; 8]>, f32)>>,
+    cache_hits: &AtomicU64,
+    nodes: &AtomicU64,
+) -> Option<(SmallVec<[Move; 8]>, f32)> {
+    if stop.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    nodes.fetch_add(1, Ordering::Relaxed);
+
+    if let Some(res) = cache.read().unwrap().get(position) {
+        cache_hits.fetch_add(1, Ordering::Relaxed);
+        return Some(res.clone());
+    }
+
+    let mut best = (smallvec![], position.eval_relative());
+    if best.1 >= beta {
+        return Some(best);
+    }
+
+    let captures = position.captures();
+
+    for capture in captures {
+        position.make_move_unchecked(capture);
+
+        let (mut line, eval) = quiesce(stop, -alpha, -alpha, position, cache, cache_hits, nodes)?;
+        line.push(capture);
+
+        if -eval >= beta {
+            position.unmake_move_unchecked(capture);
+            return Some((line, -eval));
+        }
+        if -eval > best.1 {
+            best = (line, -eval);
+        }
+        if -eval > alpha {
+            alpha = -eval;
+        }
+
+        position.unmake_move_unchecked(capture);
+    }
+
+    cache
+        .write()
+        .unwrap()
+        .insert(position.clone(), best.clone());
+    Some(best)
+}
+
+// Search for the best line up to a certain depth, returning the line and the evaluation of the
+// board after the line.
+//
+// Implementation based off the pseudocode from chessprogramming.org's page on negamax.
 fn iddfs(
     stop: &AtomicBool,
     level: u32,
@@ -32,7 +94,7 @@ fn iddfs(
     nodes.fetch_add(1, Ordering::Relaxed);
 
     if level == 0 {
-        return Some((smallvec![], position.eval_relative()));
+        return quiesce(stop, alpha, beta, position, cache, cache_hits, nodes);
     }
 
     if let Some(res) = cache.read().unwrap().get(position) {
@@ -117,6 +179,12 @@ fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
 
     while !stop.load(Ordering::Relaxed) && params.depth.is_none_or(|d| level < d) {
         let mut moves = position.possible_moves();
+
+        if moves.is_empty() {
+            // Checkmated :(
+            return;
+        }
+
         let mut cache_handle = cache.write().unwrap();
 
         std::mem::swap(&mut old_cache, &mut cache_handle);
@@ -141,8 +209,8 @@ fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
         if let Some(eval) = last_eval {
             // Update aspiration windows based on what we would expect the eval to be
             // TODO widen these windows and research if the real eval is outside this window
-            alpha = eval - 0.25;
-            beta = eval + 0.25;
+            alpha = eval - 0.5;
+            beta = eval + 0.5;
         }
 
         let Some(res) = moves
@@ -153,8 +221,8 @@ fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
                 let (mut line, eval) = iddfs(
                     &stop,
                     level,
-                    alpha,
-                    beta,
+                    -beta,
+                    -alpha,
                     &mut position,
                     &cache,
                     &old_cache,
@@ -182,7 +250,7 @@ fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
             "info depth {} time {} score cp {} nodes {} pv",
             level + 1,
             start_time.elapsed().as_millis(),
-            (eval * 100.0).round() as u32,
+            (eval * 100.0).round() as i32,
             nodes.load(Ordering::Relaxed),
         );
 
@@ -191,7 +259,7 @@ fn ponder(params: GoParams, stop: Arc<AtomicBool>, mut position: Position) {
         }
         println!("");
 
-        level += 2;
+        level += 1;
     }
 
     // Print the best move after finishing search
